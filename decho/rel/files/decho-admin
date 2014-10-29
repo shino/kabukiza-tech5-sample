@@ -1,0 +1,21 @@
+#!/bin/sh
+
+NAME=decho@127.0.0.1
+COOKIE=decho
+
+RUNNER_BASE_DIR=$(cd ${0%/*} && pwd)/..
+START_ERL=`cat $RUNNER_BASE_DIR/releases/start_erl.data`
+ERTS_VSN=${START_ERL% *}
+APP_VSN=${START_ERL#* }
+ERTS_PATH=$RUNNER_BASE_DIR/erts-$ERTS_VSN/bin
+NODETOOL="$ERTS_PATH/escript $ERTS_PATH/nodetool -name $NAME -setcookie $COOKIE"
+
+case "$1" in
+    cluster-info)
+        $NODETOOL rpc_infinity decho_ci dump
+        ;;
+    *)
+        echo "Error: Invalid arguments"
+        exit 1
+        ;;
+esac
