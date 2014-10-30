@@ -1,0 +1,637 @@
+# -*- org -*-
+
+#+TITLE: 「本番環境を止めずに問題を安全に解析する方法」
+#+AUTHOR: Shunichi Shinohara
+#+LANGUAGE: ja
+#+HTML_HEAD: <link rel="stylesheet" type="text/css" href="org-mode-document.css" />
+
+歌舞伎座.tech#5「すごいErlangをゆかいに学ぶ会」
+- 2014-10-30
+- http://kbkz.connpass.com/event/8926/
+
+# タイムテーブル (25 min)
+
+# | item         | min | accum |
+# |--------------+-----+-------+
+# | intro        |   3 |     3 |
+# | let it crash |   2 |     5 |
+# | redbug       |   7 |    12 |
+# | cluster info |   5 |    17 |
+# | summary      |   2 |    19 |
+
+# TODOs
+# - can stylesheet be included in html?
+
+* Before Introduction
+
+- 篠原 俊一
+  - ソフトウェアエンジニア @ Basho Japan KK
+  - github: =@shino=
+  - Twitter: =@itawasa=
+
+- Basho Technologies, Inc.
+  - *Riak*: 分散データベース
+  - *Riak CS*: オブジェクトストレージ
+  - オープンソース版、商用版
+- Bashoジャパン株式会社
+  - 2012 年 9 月日本法人設立
+  - 東京オフィスには 10 名
+  - 日本でも製品開発をしている
+  - 10 名中 3 名は製品開発が主業務
+
+* Introduction
+
+** どんなシステムでも障害は起きる
+
+- ソフトウェアはバグを含んでいる
+- ネットワーク障害、ハードウェア障害
+- ディスクフル
+- リソース不足 (disk IOPS, network bandwidth)
+- 「なんか遅い」
+- テスト環境では再現できない
+
+** 障害発生時
+
+1. 障害発生
+2. 情報の収集
+   - 静的: スペック、設定 (HW/SW/NW)
+   - 動的: ログ、ソフトウェアの状態、ネットワークの状態、...
+3. 解析
+   - 仮説の組み立て
+   - 裏付け (ある程度は状況証拠で我慢)
+   - 根本原因の特定
+   - 影響範囲の確定
+4. 再現
+   - 簡単にできることもあれば難しいこともある
+   - 再現環境では出来ないこともある
+   - 実環境でも再発しないこともある
+5. 修正
+   - ソフトウェアバグなら修正
+   - 設定変更、運用手順の見直し
+   - ハードウェア変更、増強
+
+** 今日の話
+
+- 「情報の収集」 の 「動的」側面に焦点をあて、
+- Erlang/OTP に関連するツールを紹介します。
+
+必要なこと
+
+- 本番システムを動かしながらの調査
+  - 原因の調査、絞り込み、原因特定
+  - ログ埋め込みや回避策の適用テスト
+- 実行性能への影響(インパクト)が小さいこと(安全に実行できる)
+- その上で、詳細まで追いかけられることも重要
+
+目次
+
+- 実行時トレース (=redbug=)
+- Erlang ノードの詳細情報取得 (=cluster_info=)
+
+# side stories (時間が余ったら)
+
+# - 開発時の redbug
+# - ライブパッチ
+# - riak-debug
+# - ログ (SASL crash log, erl_crash.dump)
+
+* =redbug=
+
+massemanet/eper
+
+- https://github.com/massemanet/eper
+- MIT License
+
+** 用途、目的
+
+用途
+
+- エラー、ログからだけでは状況が十分には分からない
+- エラー、ログからは複数の原因が考えられ、絞り込みが必要である
+
+設計ポリシー、目的
+
+- 実環境で使える tracing tool
+- 安全装置が幾重にも付いている
+- 加えて簡単
+
+** 使ってみよう
+
+#+begin_src shell-script
+% cd /any/path/
+% git clone https://github.com/massemanet/eper.git
+% cd eper
+% make
+
+% erl -pa /any/path/eper/ebin
+or
+% erl
+> code:add_path("/any/path/eper/ebin").
+#+end_src
+
+** help
+
+#+begin_src text
+> redbug:help().
+redbug - the (sensibly) Restrictive Debugger
+
+  redbug:start(Trc) -> start(Trc,[]).
+  redbug:start(Trc,Opts).
+
+Trc: list('send'|'receive'|string(RTP))
+RTP:  restricted trace pattern
+  the RTP has the form: "<mfa> when <guards> -> <actions>"
+  where <mfa> can be;
+  "mod", "mod:fun", "mod:fun/3" or "mod:fun('_',atom,X)"
+  <guard> is something like;
+  "X==1" or "is_atom(A)"
+  and <action> is;
+  "return" and/or "stack" (separated by ";")
+
+  E.g.
+  ets:lookup(T,hostname) when is_integer(T) ->stack
+[以下省略]
+#+end_src
+
+** Simple Examples:
+
+#+begin_src erlang
+> redbug:start("erlang:now").
+
+> redbug:start("binary").
+> binary:split(<<"aaa">>, <<"a">>).
+
+> redbug:start("erlang").
+#+end_src
+
+** =redbug:start/1= のバリエーション
+
+#+begin_src erlang
+%% モジュールと関数を指定
+> redbug:start("riak_kv_get_fsm:start_link").
+
+%% 戻りもトレース
+> redbug:start("riak_kv_get_fsm:start_link/'_' -> return").
+
+%% 呼び出しスタックを表示する
+> redbug:start("riak_kv_get_fsm:start_link/'_' -> stack").
+
+%% 両方
+> redbug:start("riak_kv_get_fsm:start_link/'_' -> return;stack").
+#+end_src
+
+** オプション 基本編
+
+=redbug:start/2=
+
+#+begin_src erlang
+%% 止めるまでの時間 [ミリ秒]
+> redbug:start("riak_kv_get_fsm:start_link",
+      [{time, 1000}]).
+
+%% トレースするメッセージ数の上限
+> redbug:start("riak_kv_get_fsm:start_link",
+      [{msgs, 1}]).
+
+%% メッセージサイズの上限 (止める)
+> redbug:start("riak_kv_get_fsm:start_link",
+      [{max_msg_size, 10000}]).
+#+end_src
+
+#+begin_src erlang
+%% 引数を arity だけ出力する
+> redbug:start("riak_kv_get_fsm:start_link", [{arity, true}]).
+
+%% タイムスタンプ(ミリ秒)を表示
+> redbug:start("riak_kv_get_fsm:start_link",
+      [{print_msec, true}]).
+
+%% 表示の深さ (参照: io:format/* の ~P)
+> redbug:start("riak_kv_get_fsm:start_link -> return",
+      [{print_depth, 5}]).
+> redbug:start("riak_kv_get_fsm:start_link -> return",
+      [{print_depth, 100}]).
+
+%% いろいろ組み合わせ
+> redbug:start("riak_kv_get_fsm -> return",
+      [{arity, true}, {print_msec, true},
+       {print_depth, 5}, {msgs, 100}]).
+#+end_src
+
+** 複数ノードで実行
+
+#+begin_src erlang
+> rpc:multicall(redbug, start,
+      ["riak_kv_get_fsm:execute/2 -> return;stack",
+       [{print_depth, 10}, {msgs, 100}]]).
+
+> rpc:multicall(redbug, start,
+      ["riak_kv_vnode:handle_command/3 -> return;stack",
+       [{print_depth, 10}, {msgs, 100}]]).
+#+end_src
+
+** 出力のカスタム: =print_fun= オプション
+
+出力をカスタマイズできる。
+
+#+begin_src erlang
+> redbug:start("riak_kv_get_fsm:execute/2",
+      [{print_fun,
+        fun(TrcMsg) ->
+            io:format("get fsm execute on: ~p~n", [node()])
+        end}]).
+
+> redbug:start("riak_kv_vnode:handle_command/3",
+      [{print_fun,
+       fun(TrcMsg) ->
+           io:format("kv vnode on: ~p, msg: ~n", [node(), TrcMsg])
+       end}]).
+#+end_src
+
+これだと出力がとても雑多: https://gist.github.com/shino/8c91e0c4be040ee020ac
+
+- ほしいイベントだけ抜き出す
+- 引数から必要な部分だけを抜き出す
+
+#+begin_src erlang
+> PrintFun = fun({call = Tag, Data, PI, TS}) ->
+                 {{M,F,A}, Bin} = Data,
+                 [Req | _] = A,
+                 case element(1, Req) of
+                      riak_kv_get_req_v1 ->
+                          io:format("kv vnode on: ~p, Bkey: ~p~n",
+                              [node(), element(2, Req)]);
+                      _ -> ok
+                 end end.
+
+> redbug:start("riak_kv_vnode:handle_command/3",
+      [{print_fun, PrintFun}]).
+
+> rpc:multicall(redbug, start,
+      ["riak_kv_vnode:handle_command/3",
+       [{print_fun, PrintFun}]]).
+
+結果:
+kv vnode on: 'dev1@127.0.0.1', Bkey: {<<"b">>,<<"k2">>}
+kv vnode on: 'dev3@127.0.0.1', Bkey: {<<"b">>,<<"k2">>}
+kv vnode on: 'dev2@127.0.0.1', Bkey: {<<"b">>,<<"k2">>}
+#+end_src
+
+参考: accumulator を取る関数も指定できる ={print_fun, fun(Event, Acc) -> ...=
+
+** ファイル出力: =print_file= オプション
+
+#+begin_src erlang
+> redbug:start("riak_kv_get_fsm:start_link -> return",
+      [{print_file, "/tmp/trace-out.txt"}]).
+#+end_src
+
+** [参考] help message 全部
+
+#+begin_src text
+(dev1@127.0.0.1)15> redbug:help().
+redbug - the (sensibly) Restrictive Debugger
+
+  redbug:start(Trc) -> start(Trc,[]).
+  redbug:start(Trc,Opts).
+
+  redbug is a tool to interact with the Erlang trace facility.
+  It will instruct the Erlang VM to generate so called
+  'trace messages' when certain events (such as a particular
+  function being called) occur.
+  The trace messages are either printed (i.e. human readable)
+  to a file or to the screen; or written to a trc file.
+  Using a trc file puts less stress on the system, but
+  there is no way to count the messages (so the msgs opt
+  is ignored), and the files can only be read by special tools
+  (such as 'bread'). Printing and trc files cannot be combined.
+  By default (i.e. if the 'file' opt is not given), messages
+  are printed.
+
+Trc: list('send'|'receive'|string(RTP))
+RTP:  restricted trace pattern
+  the RTP has the form: "<mfa> when <guards> -> <actions>"
+  where <mfa> can be;
+  "mod", "mod:fun", "mod:fun/3" or "mod:fun('_',atom,X)"
+  <guard> is something like;
+  "X==1" or "is_atom(A)"
+  and <action> is;
+  "return" and/or "stack" (separated by ";")
+
+  E.g.
+  ets:lookup(T,hostname) when is_integer(T) ->stack
+
+Opts: list({Opt,Val})
+  general opts:
+time         (15000)       stop trace after this many ms
+msgs         (10)          stop trace after this many msgs
+target       (node())      node to trace on
+blocking     (false)       block start/2, return a list of messages
+max_queue    (5000)        fail if internal queue gets this long
+max_msg_size (50000)       fail if seeing a msg this big
+procs        (all)         (list of) Erlang process(es)
+                             all|pid()|atom(RegName)|{pid,I2,I3}
+  print-related opts
+arity        (false)       print arity instead of arg list
+buffered     (false)       buffer messages till end of trace
+print_calls  (true)        print calls
+print_file   (standard_io) print to this file
+print_msec   (false)       print milliseconds on timestamps
+print_depth  (999999)      formatting depth for "~P"
+print_re     ("")        print only strings that match this RE
+print_fun    ()            custom print handler, fun/1 or fun/2;
+                             fun(TrcMsg) -> <ignored>
+                             fun(TrcMsg,AccOld) -> AccNew
+  trc file related opts
+file         (none)        use a trc file based on this name
+file_size    (1)           size of each trc file
+file_count   (8)           number of trc files
+#+end_src
+
+
+* =cluster_info=
+
+=basho/cluster_info=
+
+- https://github.com/basho/cluster_info
+- Apache License, Version 2.0
+
+** 用途、目的
+
+用途
+
+- Erlang/OTP のノード、クラスターの情報を詳細に知りたい
+- エラーや障害が起きた時にノード、クラスターの情報を、
+  スナップショットで保存する
+
+設計ポリシー(?)
+
+- とにかく色々保存する
+- 拡張可能
+- 拡張用に便利関数ユーティリティがいくつかある
+  - 障害時を想定しているのでタイムアウト処理
+  - 関数の出力をファイルに振り向けるなど
+
+** 使ってみよう
+
+#+begin_src shell-script
+% cd /any/path
+% git clone https://github.com/basho/cluster_info.git
+% cd cluster_info
+% make
+
+% erl -name foo@127.0.0.1 -pa /any/path/cluster_info/ebin
+or
+% erl -name foo@127.0.0.1
+> code:add_path("/any/path/cluster_info/ebin").
+#+end_src
+
+** 実行
+
+#+begin_src erlang
+(foo@127.0.0.1)1> cluster_info:start().
+{ok,<0.50.0>}
+(foo@127.0.0.1)3> cluster_info:dump_local_node("simplest.html").
+HTML report is at: 'foo@127.0.0.1':"simplest.html"
+Writing report for node 'foo@127.0.0.1'
+[ok]
+#+end_src
+
+** いくつか項目を
+
+実際のファイルを見てみる。
+
+** ケーススタディ その1: メモリが膨らんでいる
+
+1. =Report: erlang:memory() summary= どこが膨らんでいるか?
+2. processes が膨らんでいた -> =Top 50 process memory hogs=
+3. process 個別の情報 =proc:<X.Y.Z>=
+
+その他、ETS, binary が膨らんでいることもある。
+
+気をつけよう
+
+- =erlang:memory()= の単位は *バイト*
+- process 情報の =Stack+heap= などは *ワード*
+- ワードサイズ: =erlang:system_info(wordsize)=
+
+抜粋
+
+=erlang:memory/0=
+
+#+begin_src text
+ [{total,649726640},           % <=== ~ 650MB
+  {processes,606903726},
+  {processes_used,606903712},  % <=== ~ 600MB
+  {system,42822914},
+  {atom,256313},
+  {atom_used,225794},
+  {binary,116712},
+  {code,4359411},
+  {ets,347488}]
+#+end_src
+
+=Report: Top 50 process memory hogs=
+#+begin_src text
+ [{382773488,<0.32.0>},  % <=== ~ 380 MB
+  {222202272,<0.69.0>},  % <=== ~ 220 MB
+  {371936,<0.74.0>},
+[以下略]
+#+end_src
+
+=Report: erlang:system_info() summary= の =procs:=
+#+begin_src text
+=proc:<0.32.0>
+State: Waiting
+Spawned as: erlang:apply/2
+Spawned by: <0.31.0>
+Started: Thu Oct 30 16:08:17 2014
+Message queue length: 0
+Number of heap fragments: 0
+Heap fragment data: 0
+Link list: []
+Dictionary: [{{result,2},[1,1,1,1,1,,... ,{evaluator,<0.69.0>},{{command,1},[{match,4,{var,4,'L'},{call,4,{remote,4,{atom,4,lists},{atom,4,dumplicate}},[{integer,4,10000000},{integer,4,1}]}}]},{{result,1},{'EXIT',{undef,[{lists,dumplicate,[10000000,1],[]},{erl_eval,do_apply,6,[{file,"erl_eval.erl"},{line,576}]},{erl_eval,expr,5,[{file,"erl_eval.erl"},{line,367}]},{shell,exprs,7,[{file,"shell.erl"},{line,668}]},{shell,eval_exprs,7,[{file,"shell.erl"},{line,623}]},{shell,eval_loop,3,[{file,"shell.erl"},{line,608}]}]}}},{{command,2},[{match,1,{var,1,'L'},{call,1,{remote,1,{atom,1,lists},{atom,1,duplicate}},[{integer,1,10000000},{integer,1,1}]}}]}]
+Reductions: 4047288
+Stack+heap: 47828850     % <=== ~ 48 M words ~ 380 MB
+OldHeap: 17711
+Heap unused: 7828205
+OldHeap unused: 16409
+Stack dump:
+Program counter: 0x00007f02c7d913b8 (shell:shell_rep/4 + 96)
+CP: 0x0000000000000000 (invalid)
+arity = 0
+#+end_src
+
+** ケーススタディ その2: なんか遅い
+
+サンプルアプリケーション: https://github.com/shino/kabukiza-tech5-sample/
+
+1. =Report: Non-zero mailbox sizes= にメッセージが溜まっていないか?
+2. 溜まっているものがある -> プロセス個別の情報 =proc:<X.Y.Z>=
+3. メッセージパッシングでブロックしていたら、その先のプロセスが詰まっていることもある。
+   PID, Ref を頼りに他のプロセスをたどっていく。
+
+#+begin_src erlang
+> [spawn(fun() -> decho_server:block(30000) end) ||
+   _ <- lists:seq(1, 100)].
+#+end_src
+
+抜粋
+
+=Report: Non-zero mailbox sizes=
+#+begin_src text
+ [{99,<0.55.0>},{1,<0.192.0>}]
+#+end_src
+
+#+begin_src text
+=proc:<0.55.0>
+State: Waiting      % <=== メッセージはたまっているが Wait
+Name: decho_server  % <=== register された名前
+[中略]
+Message queue length: 99
+                    % <=== メッセージキュー 99 個
+Message queue: [{'$gen_call',{<0.85.0>,#Ref<0.0.0.794>},{block,30000,2}},
+                {'$gen_call',{<0.86.0>,#Ref<0.0.0.795>},{block,30000,2}},
+                {'$gen_call',{<0.89.0>,#Ref<0.0.0.796>},{block,30000,2}},
+                [中略]
+                {'$gen_call',{<0.186.0>,#Ref<0.0.0.898>},{block,30000,2}}]
+                    % <=== 実際のメッセージ
+[中略]
+Dictionary: [{'$initial_call',{decho_server,init,1}},   % <=== initial call
+             {'$ancestors',[decho_sup,<0.53.0>]}]
+[中略]
+Program counter: 0x00007fe1143a2240 (gen:do_call/4 + 576)
+CP: 0x0000000000000000 (invalid)
+arity = 0
+
+%% スタックのトップ
+0x00007fe10d3cad18 Return addr 0x00007fe11442bfa0 (gen_server:call/3 + 128)
+y(0)     #Ref<0.0.0.839>   % <=== このあたりが呼び出し先のヒント
+y(1)     'decho@127.0.0.1'
+y(2)     []
+y(3)     infinity
+y(4)     {block,30000,2}
+y(5)     '$gen_call'
+y(6)     <0.130.0>
+
+%% 一つ下のスタック
+0x00007fe10d3cad58 Return addr 0x00007fe10d045778 (decho_server:handle_call/3 + 296)
+y(0)     infinity
+y(1)     {block,30000,2}
+y(2)     <0.130.0>
+y(3)     Catch 0x00007fe11442bfa0 (gen_server:call/3 + 128)
+
+[以下略]
+#+end_src
+
+別のプロセスを =#Ref<0.0.0.839>= からたどる
+#+begin_src text
+=proc:<0.130.0>
+State: Waiting        % <=== これも Wait している
+[中略]
+Program counter: 0x00007fe1143a2240 (gen:do_call/4 + 576)
+CP: 0x0000000000000000 (invalid)
+arity = 0
+
+0x00007fe1166d8e18 Return addr 0x00007fe11442bfa0 (gen_server:call/3 + 128)
+y(0)     #Ref<0.0.0.841>    % <=== 次はこれ
+y(1)     'decho@127.0.0.1'
+[中略]
+0x00007fe1166d8e90 Return addr 0x00007fe1143a9718 (proc_lib:init_p_do_apply/3 + 56)
+y(0)     decho_blocker
+y(1)     {state}
+y(2)     <0.130.0>
+y(3)     <0.55.0>
+y(4)     {block,30000,2}
+y(5)     {<0.55.0>,#Ref<0.0.0.839>}  % <=== ここに Ref がいる
+y(6)     Catch 0x00007fe114430548 (gen_server:handle_msg/5 + 272)
+
+#+end_src
+
+もうひとつプロセスを挟むけどそこは略
+
+#+begin_src text
+=proc:<0.132.0>
+State: Waiting
+Program counter: 0x00007fe10d105788 (timer:sleep/1 + 40)
+      % <=== sleep している (╯°□°）╯︵ ┻━┻
+CP: 0x0000000000000000 (invalid)
+arity = 0
+
+0x00007fe1166d9d20 Return addr 0x00007fe10c498878 (decho_blocker:handle_call/3 + 176)
+y(0)     30000
+
+[中略]
+y(5)     {<0.131.0>,#Ref<0.0.0.843>}
+y(6)     Catch 0x00007fe114430548 (gen_server:handle_msg/5 + 272)
+#+end_src
+
+
+=State= の種類 (erlang.org の doc より)
+
+- *Scheduled* - The process was scheduled to run but not currently
+  running ("in the run queue").
+- *Waiting* - The process was waiting for something (in receive).
+- *Running* - The process was currently running. If the BIF
+  erlang:halt/1 was called, this was the process calling it.
+- *Exiting* - The process was on its way to exit.
+- *Garbing* - This is bad luck, the process was garbage collecting when
+  the crash dump was written, the rest of the information for this
+  process is limited.
+- *Suspended* - The process is suspended, either by the BIF
+  erlang:suspend_process/1 or because it is trying to write to a busy
+  port.
+
+
+** 拡張方法
+
+参考だけ
+
+- =cluster_info_basic.erl= : デフォルトのコールバック
+- =cluster_info_ex.erl= : 拡張コールバックのシンプルな例
+- =riak_kv= の拡張モジュール: =riak_vk_cinfo.erl=
+
+  https://github.com/basho/riak_kv/blob/develop/src/riak_kv_cinfo.erl
+
+* まとめ
+
+- =redbug=, =cluster-info= を簡単に紹介しました
+- なにかあった時に使えるツールたちです
+- なにはともあれパッケージに含めておきましょう
+
+* References
+
+- "Erlang Tracing: more than you wanted to know" by Scott Lystig Fritchie
+  - https://gist.github.com/slfritchie/9616500
+
+- Recon Application
+  - http://ferd.github.io/recon/
+  - "Recon is a library to be dropped into any other Erlang project,
+    to be used to assist DevOps people diagnose problems in production
+    nodes."
+
+- "Taking the printf out of printf Debugging"
+  - Erlang Factory - Mats Cronqvist, Mashing the monolith
+  - http://www.erlang-factory.com/conference/Budapest2013/speakers/MatsCronqvist
+  - http://engineering.klarna.com/news/taking-the-printf-out-of-printf-debugging/
+
+- Erlang -- How to interpret the Erlang crash dumps
+  - http://www.erlang.org/doc/apps/erts/crash_dump.html
+  - http://www.erlang.org/doc/apps/erts/crash_dump.html#proc_data
+
+- [erlang-questions] Fwd: How to read process's backtrace data?
+  http://erlang.org/pipermail/erlang-questions/2012-November/070609.html
+
+# 実稼働環境ではなく開発寄りなのでコメントアウト
+#   - Flame Graphs
+#     - http://www.brendangregg.com/flamegraphs.html
+#   - Hot/Cold Flame Graphs
+#     - http://www.brendangregg.com/FlameGraphs/hotcoldflamegraphs.html
+#   - CPU Flame Graphs
+#     - http://www.brendangregg.com/FlameGraphs/cpuflamegraphs.html
+#   - proger/eflame
+#     - https://github.com/proger/eflame
+#   - Erlang Factory SF Bay Area 2014
+#     - http://www.erlang-factory.com/sfbay2014/louisphilippe-gauthier
+
+
