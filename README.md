@@ -17,6 +17,8 @@ How to Build
 Sample cluster_info files
 =========================
 
-- `simplest_cluster-info.html` : Dump after just launced beam
+- `simplest_cluster-info.html` : Dump after just launced fresh node
 - `decho@127.0.0.1_cluster-info_stable-state.html` :
-  Dump of beam including decho app, in stable state
+  Dump of node including decho app, in stable state
+- `decho@127.0.0.1_cluster-info_long-mbox.html` :
+  Dump of node including decho app, with non-zero mailbox size
