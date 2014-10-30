@@ -12,7 +12,7 @@ NODETOOL="$ERTS_PATH/escript $ERTS_PATH/nodetool -name $NAME -setcookie $COOKIE"
 
 case "$1" in
     cluster-info)
-        $NODETOOL rpc_infinity decho_ci dump
+        $NODETOOL rpc_infinity decho_ci dump $NAME
         ;;
     *)
         echo "Error: Invalid arguments"

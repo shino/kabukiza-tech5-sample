@@ -1,14 +1,13 @@
--module(decho_server).
+-module(decho_blocker).
 -behaviour(gen_server).
--define(SERVER, ?MODULE).
 
--record(state, {previous}).
+-record(state, {}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([call/1, block/0, block/1]).
+-export([block/2]).
 -export([start_link/0]).
 
 %% ------------------------------------------------------------------
@@ -22,17 +21,11 @@
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
-call(Req) ->
-    gen_server:call(?SERVER, Req).
-
-block() ->
-    block(2000).
-
-block(SleepInterval) ->
-    gen_server:call(?SERVER, {block, SleepInterval, 2}, infinity).
+block(Pid, Req) ->
+    gen_server:call(Pid, Req, infinity).
 
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    gen_server:start_link(?MODULE, [], []).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -41,17 +34,15 @@ start_link() ->
 init(_Args) ->
     {ok, #state{}}.
 
-handle_call(boom, _From, State) ->
-    {reply, {ok, boom:boom()}, State};
-handle_call({block, _, _} = BlockReq, _From, State) ->
-    {ok, Blocker} = decho_blocker:start_link(),
-    Res = decho_blocker:block(Blocker, BlockReq),
-    {reply, Res, State};
-handle_call(Request, _From, #state{previous = spam} = State) ->
-    {reply, {ok, string:copies("SPAM!!", 10)}, State#state{previous = Request}};
-handle_call(Request, _From, #state{previous = Previous} = State) ->
-    {reply, {ok, Previous}, State#state{previous = Request}}.
-
+handle_call({block, SleepInterval, 0 = _Spawns}, _From, State) ->
+    ok = timer:sleep(SleepInterval),
+    io:format(user, "sleep_done: ~p~n", [sleep_done]),
+    {reply, ok, State};
+handle_call({block, SleepInterval, Spawns}, _From, State) ->
+    {ok, Spawned} = decho_blocker:start_link(),
+    io:format(user, "Spawned: ~p~n", [Spawned]),
+    Res = decho_blocker:block(Spawned, {block, SleepInterval, Spawns - 1}),
+    {reply, Res, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -64,8 +55,3 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-%% ------------------------------------------------------------------
-%% Internal Function Definitions
-%% ------------------------------------------------------------------
-
