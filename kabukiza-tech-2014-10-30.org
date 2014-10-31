@@ -9,16 +9,6 @@
 - 2014-10-30
 - http://kbkz.connpass.com/event/8926/
 
-# タイムテーブル (25 min)
-
-# | item         | min | accum |
-# |--------------+-----+-------+
-# | intro        |   3 |     3 |
-# | let it crash |   2 |     5 |
-# | redbug       |   7 |    12 |
-# | cluster info |   5 |    17 |
-# | summary      |   2 |    19 |
-
 # TODOs
 # - can stylesheet be included in html?
 
@@ -85,20 +75,12 @@
 
 目次
 
-- 実行時トレース (=redbug=)
+- 安全な実行時トレース (=redbug=)
 - Erlang ノードの詳細情報取得 (=cluster_info=)
-
-# side stories (時間が余ったら)
-
-# - 開発時の redbug
-# - ライブパッチ
-# - riak-debug
-# - ログ (SASL crash log, erl_crash.dump)
 
 * =redbug=
 
 massemanet/eper
-
 - https://github.com/massemanet/eper
 - MIT License
 
@@ -150,7 +132,7 @@ RTP:  restricted trace pattern
 
   E.g.
   ets:lookup(T,hostname) when is_integer(T) ->stack
-[以下省略]
+[以下略]
 #+end_src
 
 ** Simple Examples:
@@ -171,13 +153,13 @@ RTP:  restricted trace pattern
 > redbug:start("riak_kv_get_fsm:start_link").
 
 %% 戻りもトレース
-> redbug:start("riak_kv_get_fsm:start_link/'_' -> return").
+> redbug:start("riak_kv_get_fsm:start_link -> return").
 
 %% 呼び出しスタックを表示する
-> redbug:start("riak_kv_get_fsm:start_link/'_' -> stack").
+> redbug:start("riak_kv_get_fsm:start_link -> stack").
 
 %% 両方
-> redbug:start("riak_kv_get_fsm:start_link/'_' -> return;stack").
+> redbug:start("riak_kv_get_fsm:start_link -> return;stack").
 #+end_src
 
 ** オプション 基本編
@@ -285,6 +267,7 @@ kv vnode on: 'dev2@127.0.0.1', Bkey: {<<"b">>,<<"k2">>}
 > redbug:start("riak_kv_get_fsm:start_link -> return",
       [{print_file, "/tmp/trace-out.txt"}]).
 #+end_src
+
 
 ** [参考] help message 全部
 
@@ -397,7 +380,7 @@ Writing report for node 'foo@127.0.0.1'
 [ok]
 #+end_src
 
-** いくつか項目を
+** 中身をみてみましょう
 
 実際のファイルを見てみる。
 
@@ -582,11 +565,9 @@ y(6)     Catch 0x00007fe114430548 (gen_server:handle_msg/5 + 272)
   erlang:suspend_process/1 or because it is trying to write to a busy
   port.
 
-
 ** 拡張方法
 
-参考だけ
-
+参考情報
 - =cluster_info_basic.erl= : デフォルトのコールバック
 - =cluster_info_ex.erl= : 拡張コールバックのシンプルな例
 - =riak_kv= の拡張モジュール: =riak_vk_cinfo.erl=
