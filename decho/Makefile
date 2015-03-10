@@ -1,4 +1,4 @@
-.PHONY: all deps, compile compile-top generate clean
+.PHONY: all deps compile compile-top generate clean
 
 all: deps compile generate
 

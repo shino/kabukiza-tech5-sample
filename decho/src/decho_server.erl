@@ -43,6 +43,8 @@ init(_Args) ->
 
 handle_call(boom, _From, State) ->
     {reply, {ok, boom:boom()}, State};
+handle_call({sleep, SleepTime}, _From, State) ->
+    {reply, {ok, timer:sleep(SleepTime)}, State};
 handle_call({block, _, _} = BlockReq, _From, State) ->
     {ok, Blocker} = decho_blocker:start_link(),
     Res = decho_blocker:block(Blocker, BlockReq),
@@ -53,6 +55,9 @@ handle_call(Request, _From, #state{previous = Previous} = State) ->
     {reply, {ok, Previous}, State#state{previous = Request}}.
 
 
+handle_cast({sleep, SleepTime}, State) ->
+    timer:sleep(SleepTime),
+    {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

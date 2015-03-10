@@ -3,8 +3,8 @@ kabukiza-tech5-sample
 
 Some sample code for the talk at Kabukiza-tech # 5.
 
-How to Build
-============
+How to Build and Start node
+===========================
 
 - Clone this repository and `cd` to it.
 - Execute following steps.
@@ -12,6 +12,17 @@ How to Build
 ```
 % cd decho
 % make
+% ./rel/decho/bin/decho console
+```
+
+How to output cluster_info
+==========================
+
+In stable state:
+
+```
+% cd decho
+% ./rel/decho/bin/decho-admin cluster-info
 ```
 
 Sample cluster_info files
